@@ -1,0 +1,23 @@
+{
+    "operations": [
+        {
+            "op": "create_table",
+            "table": "settings",
+            "fields": [
+                {
+                    "name": "id",
+                    "type": "string"
+                },
+                {
+                    "name": "walletId",
+                    "type": "string"
+                },
+                {
+                    "name": "darkMode",
+                    "type": "string",
+                    "default": ""
+                }
+            ]
+        }
+    ]
+}
