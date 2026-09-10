@@ -366,6 +366,7 @@
       // Initialize dark mode from localStorage or system preference
       this.initDarkMode();
       window.LNbitsBridge.connect().then(async function (ctx) {
+        self.loadDarkModeSetting();
         await self.loadWallets();
         self.loadGiftCards();
         self.loadWalletBalance();
@@ -400,6 +401,7 @@
         this.isDarkMode = !this.isDarkMode;
         this.applyDarkMode();
         try { localStorage.setItem('giftcardswasm.darkMode', String(this.isDarkMode)); } catch (e) {}
+        this.saveDarkModeSetting();
       },
 
       applyDarkMode() {
@@ -410,6 +412,25 @@
           document.body.classList.remove('body--dark');
           if (this.$q && this.$q.dark) this.$q.dark.set(false);
         }
+      },
+
+      loadDarkModeSetting() {
+        var self = this;
+        this.apiCall('GET', '/settings').then(function (settings) {
+          if (settings && (settings.darkMode === 'true' || settings.darkMode === 'false')) {
+            self.isDarkMode = settings.darkMode === 'true';
+            self.applyDarkMode();
+          }
+        }).catch(function () {
+          // Keep the detected mode if the stored preference is unavailable.
+        });
+      },
+
+      saveDarkModeSetting() {
+        var self = this;
+        this.apiCall('PUT', '/settings', {darkMode: this.isDarkMode}).catch(function () {
+          self.$q.notify({ message: 'Could not save dark mode preference', type: 'warning' });
+        });
       },
 
       // ----- Bridge API helpers -----

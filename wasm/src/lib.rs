@@ -532,6 +532,53 @@ impl Guest for Component {
         ok(json!(wallets))
     }
 
+    fn get_settings(payload: String) -> String {
+        let req: Value = match serde_json::from_str(&payload) {
+            Ok(v) => v,
+            Err(e) => return err(&format!("Invalid request: {e}")),
+        };
+
+        let wallet_id = match resolve_user_wallet(&req) {
+            Ok(wallet_id) => wallet_id,
+            Err(message) => return err(&message),
+        };
+
+        match h_storage_get("settings", &wallet_id) {
+            Some(row) => ok(json!({
+                "darkMode": row.get("darkMode").and_then(|v| v.as_str()).unwrap_or(""),
+            })),
+            None => ok(json!({"darkMode": ""})),
+        }
+    }
+
+    fn set_settings(payload: String) -> String {
+        let req: Value = match serde_json::from_str(&payload) {
+            Ok(v) => v,
+            Err(e) => return err(&format!("Invalid request: {e}")),
+        };
+
+        let wallet_id = match resolve_user_wallet(&req) {
+            Ok(wallet_id) => wallet_id,
+            Err(message) => return err(&message),
+        };
+
+        let dark_mode = match req.get("darkMode") {
+            Some(Value::Bool(b)) => b.to_string(),
+            Some(Value::String(s)) if s == "true" || s == "false" => s.clone(),
+            _ => return err("darkMode must be true or false"),
+        };
+
+        let row = json!({
+            "id": wallet_id,
+            "walletId": wallet_id,
+            "darkMode": dark_mode,
+        });
+        if !h_storage_set("settings", &row) {
+            return err("Failed to save settings");
+        }
+        ok(json!({"ok": true}))
+    }
+
     fn get_cards(payload: String) -> String {
         let req: Value = match serde_json::from_str(&payload) {
             Ok(v) => v,

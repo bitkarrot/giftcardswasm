@@ -29,6 +29,13 @@
                 {"name": "feePercent", "type": "string", "default": "0"},
                 {"name": "feeSats", "type": "integer", "default": 0}
             ]
+        },
+        "settings": {
+            "fields": [
+                {"name": "id", "type": "string"},
+                {"name": "walletId", "type": "string"},
+                {"name": "darkMode", "type": "string", "default": ""}
+            ]
         }
     }
 }

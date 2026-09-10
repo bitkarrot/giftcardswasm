@@ -1,6 +1,6 @@
 Create, personalize, and redeem Bitcoin Lightning gift cards from LNbits in a sandboxed WASM extension.
 
-Gift Cards (WASM) supports:
+Gift Cards supports:
 
 - Individual and bulk gift card creation
 - Custom recipient, sender, message, expiry, and card designs
