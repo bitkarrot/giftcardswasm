@@ -5,6 +5,10 @@
     "description_md": "https://raw.githubusercontent.com/bitkarrot/giftcardswasm/v0.2.0/description.md",
     "images": [
         {
+            "uri": "https://img.youtube.com/vi/MZyuV8dC5RU/hqdefault.jpg",
+            "link": "https://www.youtube.com/embed/MZyuV8dC5RU"
+        },
+        {
             "uri": "https://github.com/bitkarrot/giftcardswasm/raw/main/screenshots/06-card-detail-qr.png"
         }
     ],
@@ -16,7 +20,7 @@
         }
     ],
     "license": "MIT",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "min_lnbits_version": "1.6.0rc3",
     "tile": "/ext-assets/giftcardswasm/assets/icon.png",
     "tags": ["gift-cards", "lnurl-withdraw", "wasm", "lightning"],

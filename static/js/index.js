@@ -57,6 +57,8 @@
         // Card designer state
         selectedTemplate: 'portrait',
         templateAssetId: null,
+        // The host caps WASM requests at 1 MB; keep stored images well under.
+        MAX_TEMPLATE_DATA_URL: 600 * 1024,
         templateUrl: IMG_BASE + '/template_portrait.png',
         sampleTemplates: [
           {value: 'GiftBoxes',         label: 'Gift Boxes',          w: 825, h: 638},
@@ -89,7 +91,6 @@
         dragState: null,
         resizeState: null,
         isUploadingTemplate: false,
-        templateAssetStaged: false,
         designLoaded: false,
         // Bulk create dialog
         bulkDialog: {
@@ -556,10 +557,6 @@
           fee_sats: null
         };
         this.createDialog.result = null;
-        if (this.templateAssetId && this.templateAssetStaged) {
-          this.deleteAssetFile(this.templateAssetId);
-        }
-        this.templateAssetStaged = false;
         this.selectedTemplate = 'portrait';
         this.templateAssetId = null;
         this.templateUrl = IMG_BASE + '/template_portrait.png';
@@ -606,7 +603,6 @@
           this.createDialog.result = data;
           await this.loadGiftCards();
           this.loadWalletBalance();
-          this.templateAssetStaged = false;
           this.$q.notify({ message: 'Gift card created successfully!', type: 'positive' });
         } catch (error) {
           this.notifyError(error);
@@ -703,6 +699,26 @@
         try {
           // Fetch full card details to get the redemption URL / token
           var detail = await this.apiCall('GET', '/cards/' + card.id, null);
+          var dataUrl = await this._renderCardImage(detail, card);
+
+          // The extension sandbox blocks file downloads. Show the image
+          // in a dialog where the user can right-click > "Save image as…"
+          this.imageDialog.url = dataUrl;
+          this.imageDialog.filename = 'giftcard_' + card.id + '.png';
+          this.imageDialog.show = true;
+        } catch (error) {
+          console.error('Printable generation failed:', error);
+          this.notifyError(error);
+        }
+      },
+
+      /**
+       * Composite a gift card image client-side (template background + QR
+       * code + text overlay) and return it as a PNG data: URL. The WASM
+       * backend has no image endpoint, and the CSP only allows ext-assets
+       * and data: images, so data: URLs are used everywhere.
+       */
+      async _renderCardImage(detail, card) {
           var redemptionUrl = detail.redemptionUrl || card.redemptionUrl || '';
           if (!redemptionUrl && detail.rawToken) {
             redemptionUrl = window.location.origin + '/ext/giftcardswasm/redeem/' + detail.rawToken;
@@ -726,6 +742,17 @@
             else if (sample) { tw = sample.w; th = sample.h; }
             else { tw = 425; th = 650; }
 
+            // Custom templates are stored as data: URLs (no backend asset
+            // store); load the image first to get its true dimensions.
+            var customImg = null;
+            if (design.templateName === 'custom' && design.templateAssetId) {
+              customImg = await this._loadImage(design.templateAssetId);
+              if (customImg) {
+                tw = customImg.naturalWidth;
+                th = customImg.naturalHeight;
+              }
+            }
+
             canvas.width = tw;
             canvas.height = th;
             var ctx = canvas.getContext('2d');
@@ -734,15 +761,10 @@
             if (design.templateName === 'portrait' || design.templateName === 'landscape') {
               ctx.fillStyle = design.bgColor || '#ebedf5';
               ctx.fillRect(0, 0, tw, th);
+            } else if (customImg) {
+              ctx.drawImage(customImg, 0, 0, tw, th);
             } else {
-              // Load template image
-              var imgUrl;
-              if (design.templateName === 'custom' && design.templateAssetId) {
-                imgUrl = API_BASE + '/cards/template/' + design.templateAssetId;
-              } else {
-                imgUrl = IMG_BASE + '/template_' + design.templateName + '.png';
-              }
-              await this._loadImageAndDraw(ctx, imgUrl, tw, th);
+              await this._loadImageAndDraw(ctx, IMG_BASE + '/template_' + design.templateName + '.png', tw, th);
             }
 
             // Draw QR code
@@ -831,16 +853,16 @@
             }
           }
 
-          // The extension sandbox blocks file downloads. Show the image
-          // in a dialog where the user can right-click > "Save image as…"
-          var dataUrl = canvas.toDataURL('image/png');
-          this.imageDialog.url = dataUrl;
-          this.imageDialog.filename = 'giftcard_' + card.id + '.png';
-          this.imageDialog.show = true;
-        } catch (error) {
-          console.error('Printable generation failed:', error);
-          this.notifyError(error);
-        }
+          return canvas.toDataURL('image/png');
+      },
+
+      _loadImage(url) {
+        return new Promise(function (resolve) {
+          var img = new Image();
+          img.onload = function () { resolve(img); };
+          img.onerror = function () { resolve(null); };
+          img.src = url;
+        });
       },
 
       _loadImageAndDraw(ctx, url, w, h) {
@@ -987,7 +1009,7 @@
         var newSize = Math.max(this.minQrSize, this.resizeState.origSize + deltaActual);
         var maxPreviewSize = this.previewWidth - this.qrX;
         var maxActualSize = maxPreviewSize / scale;
-        this.qrSize = Math.min(newSize, maxActualSize);
+        this.qrSize = Math.round(Math.min(newSize, maxActualSize));
       },
 
       endResize() {
@@ -998,10 +1020,6 @@
 
       onTemplateChange(value) {
         if (value !== 'custom') {
-          if (this.templateAssetId && this.templateAssetStaged) {
-            this.deleteAssetFile(this.templateAssetId);
-          }
-          this.templateAssetStaged = false;
           this.templateAssetId = null;
         }
 
@@ -1045,6 +1063,16 @@
         var file = event.target.files && event.target.files[0];
         if (!file) return;
 
+        if (file.type !== 'image/png' && file.type !== 'image/jpeg') {
+          this.$q.notify({ message: 'Only PNG and JPG images are supported.', type: 'negative' });
+          return;
+        }
+
+        if (file.size > 15 * 1024 * 1024) {
+          this.$q.notify({ message: 'Template image too large. Maximum file size is 15 MB.', type: 'negative' });
+          return;
+        }
+
         var dims;
         try {
           dims = await this._getImageDimensions(file);
@@ -1059,22 +1087,37 @@
 
         this.isUploadingTemplate = true;
         try {
-          if (this.templateAssetId && this.templateAssetStaged) {
-            await this.deleteAssetFile(this.templateAssetId);
+          // There is no backend asset store for WASM extensions, and the
+          // iframe CSP blocks blob: URLs (img-src allows only ext-assets and
+          // data:). Store the image as a data: URL in templateAssetId — it
+          // is persisted on the card and exposed to the public redeem page.
+          // The host caps WASM requests at 1 MB, so images that would exceed
+          // the budget are re-encoded (webp, or jpeg on a white background)
+          // and progressively downscaled until they fit.
+          var dataUrl = dims.dataUrl;
+          var imgW = dims.width;
+          var imgH = dims.height;
+          if (dataUrl.length > this.MAX_TEMPLATE_DATA_URL) {
+            var compressed = await this._compressImageDataUrl(dims.dataUrl, dims.width, dims.height);
+            if (!compressed) {
+              this.$q.notify({ message: 'Template image could not be compressed below the size limit.', type: 'negative' });
+              return;
+            }
+            dataUrl = compressed.dataUrl;
+            imgW = compressed.width;
+            imgH = compressed.height;
           }
-          var assetId = await this.uploadAssetFile(file);
-          this.templateAssetId = assetId;
-          this.templateAssetStaged = true;
-          this.templateUrl = API_BASE + '/cards/template/' + assetId;
-          this.actualTemplateWidth = dims.width;
-          this.actualTemplateHeight = dims.height;
+          this.templateAssetId = dataUrl;
+          this.templateUrl = dataUrl;
+          this.actualTemplateWidth = imgW;
+          this.actualTemplateHeight = imgH;
           var maxPreview = 325;
-          if (dims.width >= dims.height) {
+          if (imgW >= imgH) {
             this.previewWidth = maxPreview;
-            this.previewHeight = Math.round(maxPreview * dims.height / dims.width);
+            this.previewHeight = Math.round(maxPreview * imgH / imgW);
           } else {
             this.previewHeight = maxPreview;
-            this.previewWidth = Math.round(maxPreview * dims.width / dims.height);
+            this.previewWidth = Math.round(maxPreview * imgW / imgH);
           }
           this.$q.notify({ message: 'Custom template uploaded', type: 'positive' });
         } catch (error) {
@@ -1084,36 +1127,54 @@
         }
       },
 
-      _getImageDimensions(file) {
-        return new Promise(function (resolve, reject) {
-          var url = URL.createObjectURL(file);
-          var img = new Image();
-          img.onload = function () {
-            resolve({ width: img.naturalWidth, height: img.naturalHeight });
-            URL.revokeObjectURL(url);
-          };
-          img.onerror = function (err) {
-            URL.revokeObjectURL(url);
-            reject(err);
-          };
-          img.src = url;
-        });
-      },
-
-      async uploadAssetFile(file) {
-        // The bridge callApi supports FormData bodies
-        var form = new FormData();
-        form.append('file', file);
-        var data = await this.apiCall('POST', '/cards/template', form);
-        return data.id;
-      },
-
-      async deleteAssetFile(assetId) {
-        try {
-          await this.apiCall('DELETE', '/cards/template/' + assetId, null);
-        } catch (error) {
-          console.warn('Failed to delete previous template:', error);
+      // Re-encode an image through a canvas so the stored data: URL stays
+      // under the host's 1 MB WASM request limit. Tries webp (keeps alpha)
+      // then jpeg on white, downscaling until the result fits the budget.
+      async _compressImageDataUrl(dataUrl, width, height) {
+        var img = await this._loadImage(dataUrl);
+        if (!img) return null;
+        var best = null;
+        for (var scale = 1; scale >= 0.25; scale *= 0.75) {
+          var w = Math.max(1, Math.round(width * scale));
+          var h = Math.max(1, Math.round(height * scale));
+          var canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          var ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          var out = canvas.toDataURL('image/webp', 0.85);
+          if (out.indexOf('data:image/webp') !== 0) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, w, h);
+            ctx.drawImage(img, 0, 0, w, h);
+            out = canvas.toDataURL('image/jpeg', 0.85);
+          }
+          if (!best || out.length < best.dataUrl.length) {
+            best = { dataUrl: out, width: w, height: h };
+          }
+          if (out.length <= this.MAX_TEMPLATE_DATA_URL) {
+            return { dataUrl: out, width: w, height: h };
+          }
         }
+        return best && best.dataUrl.length <= this.MAX_TEMPLATE_DATA_URL ? best : null;
+      },
+
+      _getImageDimensions(file) {
+        // Read the file as a data: URL — blob: URLs from createObjectURL are
+        // blocked by the extension iframe's img-src CSP directive.
+        return new Promise(function (resolve, reject) {
+          var reader = new FileReader();
+          reader.onload = function () {
+            var img = new Image();
+            img.onload = function () {
+              resolve({ width: img.naturalWidth, height: img.naturalHeight, dataUrl: reader.result });
+            };
+            img.onerror = reject;
+            img.src = reader.result;
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
       },
 
       // ----- Bulk create dialog -----
@@ -1138,10 +1199,6 @@
         this.bulkDialog.csvErrors = 0;
         this.bulkDialog.csvErrorRows = [];
         this.bulkDialog.csvData = { designMode: 'none', fee_mode: 'default', fee_percent: null, fee_sats: null };
-        if (this.templateAssetId && this.templateAssetStaged) {
-          this.deleteAssetFile(this.templateAssetId);
-        }
-        this.templateAssetStaged = false;
         this.selectedTemplate = 'portrait';
         this.templateAssetId = null;
         this.templateUrl = IMG_BASE + '/template_portrait.png';
@@ -1185,7 +1242,6 @@
             await this.apiCall('POST', '/cards/bulk', csvPayload);
             this.bulkDialog.show = false;
             var csvCount = this.bulkDialog.csvRows.length;
-            this.templateAssetStaged = false;
             this.$q.notify({ message: csvCount + ' gift cards created successfully!', type: 'positive' });
             this.clearFilters();
             this.loadWalletBalance();
@@ -1211,7 +1267,6 @@
             await this.apiCall('POST', '/cards/bulk', samePayload);
             this.bulkDialog.show = false;
             var count = this.bulkDialog.sameData.count;
-            this.templateAssetStaged = false;
             this.$q.notify({ message: count + ' gift cards created successfully!', type: 'positive' });
             this.clearFilters();
             this.loadWalletBalance();
@@ -1273,16 +1328,11 @@
             data.redemptionUrl = window.location.origin + data.redemptionUrl;
           }
           this.detailDialog.card = data;
-          // Construct the template image URL from the card's design data
-          var design = data.design || {};
-          var templateName = design.templateName || data.templateName || '';
-          var templateAssetId = design.templateAssetId || data.templateAssetId || '';
-          if (templateName === 'custom' && templateAssetId) {
-            this.detailDialog.cardImageUrl = API_BASE + '/cards/template/' + templateAssetId;
-          } else if (templateName && templateName !== 'portrait' && templateName !== 'landscape' && templateName !== 'none' && templateName !== 'custom') {
-            this.detailDialog.cardImageUrl = IMG_BASE + '/template_' + templateName + '.png';
-          } else if (templateName === 'portrait' || templateName === 'landscape') {
-            this.detailDialog.cardImageUrl = IMG_BASE + '/template_' + templateName + '.png';
+          // Render the actual card image (template + QR + text overlay)
+          try {
+            this.detailDialog.cardImageUrl = await this._renderCardImage(data, card);
+          } catch (imgError) {
+            console.error('Failed to render card image:', imgError);
           }
         } catch (error) {
           console.error('Failed to load card details:', error);
@@ -1314,10 +1364,6 @@
       },
 
       resetCardDesigner() {
-        if (this.templateAssetId && this.templateAssetStaged) {
-          this.deleteAssetFile(this.templateAssetId);
-        }
-        this.templateAssetStaged = false;
         this.selectedTemplate = 'portrait';
         this.templateAssetId = null;
         this.templateUrl = IMG_BASE + '/template_portrait.png';
@@ -1343,19 +1389,38 @@
       },
 
       applyDesignToDesigner(design) {
+        var self = this;
         if (design.templateName && design.templateName !== 'custom') {
           this.selectedTemplate = design.templateName;
           this.onTemplateChange(design.templateName);
         } else if (design.templateName === 'custom') {
           this.selectedTemplate = 'custom';
           this.templateAssetId = design.templateAssetId || null;
-          this.templateAssetStaged = false;
           if (design.templateAssetId) {
-            this.templateUrl = API_BASE + '/cards/template/' + design.templateAssetId;
+            // Custom templates are stored as data: URLs on the card
+            this.templateUrl = design.templateAssetId;
+            // Restore the template's real dimensions before positions are
+            // derived from the preview size below.
+            this._loadImage(design.templateAssetId).then(function (img) {
+              if (!img) return;
+              self.actualTemplateWidth = img.naturalWidth;
+              self.actualTemplateHeight = img.naturalHeight;
+              var maxPreview = 325;
+              if (img.naturalWidth >= img.naturalHeight) {
+                self.previewWidth = maxPreview;
+                self.previewHeight = Math.round(maxPreview * img.naturalHeight / img.naturalWidth);
+              } else {
+                self.previewHeight = maxPreview;
+                self.previewWidth = Math.round(maxPreview * img.naturalWidth / img.naturalHeight);
+              }
+              self.qrX = Math.round((design.qrXFrac || 0.1) * self.previewWidth);
+              self.qrY = Math.round((design.qrYFrac || 0.7) * self.previewHeight);
+              self.textX = Math.round((design.textXFrac || 0.1) * self.previewWidth);
+              self.textY = Math.round((design.textYFrac || 0.1) * self.previewHeight);
+            });
           }
         } else {
           this.templateAssetId = design.templateAssetId || null;
-          this.templateAssetStaged = false;
         }
         this.qrX = Math.round((design.qrXFrac || 0.1) * this.previewWidth);
         this.qrY = Math.round((design.qrYFrac || 0.7) * this.previewHeight);
@@ -1378,11 +1443,11 @@
           template_name: this.selectedTemplate,
           qr_x_frac: this.qrX / this.previewWidth,
           qr_y_frac: this.qrY / this.previewHeight,
-          qr_size: this.qrSize,
+          qr_size: Math.round(this.qrSize),
           text_x_frac: this.textX / this.previewWidth,
           text_y_frac: this.textY / this.previewHeight,
           font_family: this.selectedFont,
-          font_size: this.fontSize,
+          font_size: Math.round(this.fontSize),
           font_color: this.fontColor,
           bg_color: this.bgColor,
           text_align: this.textAlign,
@@ -1412,7 +1477,6 @@
           }
           await this.apiCall('PUT', '/cards/' + this.editDialog.card.id, payload);
           this.editDialog.show = false;
-          this.templateAssetStaged = false;
           this.$q.notify({ message: 'Card updated successfully', type: 'positive' });
           await this.loadGiftCards();
         } catch (error) {

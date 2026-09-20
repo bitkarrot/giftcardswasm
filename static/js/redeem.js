@@ -295,33 +295,45 @@
             if (sample) { tw = sample.w; th = sample.h; }
           }
 
-          canvas.width = tw;
-          canvas.height = th;
-          var ctx = canvas.getContext('2d');
-
-          // Determine image URL
+          // Determine image URL. Custom templates are stored as data: URLs
+          // on the card itself (the iframe CSP only allows ext-assets and
+          // data: images, and there is no backend asset endpoint).
           var imgUrl = null;
-          if (templateName === 'custom' && templateAssetId) {
-            imgUrl = API_BASE + '/cards/template/' + templateAssetId;
+          var isCustom = templateName === 'custom' && templateAssetId;
+          if (isCustom) {
+            imgUrl = templateAssetId;
           } else if (templateName && templateName !== 'portrait' && templateName !== 'landscape') {
             imgUrl = IMG_BASE + '/template_' + templateName + '.png';
           }
+
+          var ctx = canvas.getContext('2d');
 
           if (imgUrl) {
             // Load template image, then draw QR + text overlay
             var img = new Image();
             img.onload = function () {
+              // Custom template dimensions are taken from the image itself
+              if (isCustom) {
+                tw = img.naturalWidth;
+                th = img.naturalHeight;
+              }
+              canvas.width = tw;
+              canvas.height = th;
               ctx.drawImage(img, 0, 0, tw, th);
               self._drawQrAndTextOnCard(ctx, tw, th);
             };
             img.onerror = function () {
               // Fallback: draw a plain background
+              canvas.width = tw;
+              canvas.height = th;
               ctx.fillStyle = '#ebedf5';
               ctx.fillRect(0, 0, tw, th);
               self._drawQrAndTextOnCard(ctx, tw, th);
             };
             img.src = imgUrl;
           } else {
+            canvas.width = tw;
+            canvas.height = th;
             // Portrait/landscape: plain background
             ctx.fillStyle = '#ebedf5';
             ctx.fillRect(0, 0, tw, th);

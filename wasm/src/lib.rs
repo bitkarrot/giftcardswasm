@@ -228,6 +228,14 @@ fn err(msg: &str) -> String {
     json!({ "error": msg }).to_string()
 }
 
+/// Read a JSON number as u64, accepting fractional values by rounding.
+/// The frontend designer can send floats (e.g. qr_size = 458.9 after a
+/// drag-resize), and `as_u64()` alone would silently drop them.
+fn json_u64(v: &Value) -> Option<u64> {
+    v.as_u64()
+        .or_else(|| v.as_f64().map(|f| f.round().max(0.0) as u64))
+}
+
 fn ok(data: Value) -> String {
     data.to_string()
 }
@@ -489,13 +497,13 @@ impl Guest for Component {
                 let qr_config = json!({
                     "qr_x_frac": design.get("qr_x_frac").and_then(|v| v.as_f64()).unwrap_or(0.1),
                     "qr_y_frac": design.get("qr_y_frac").and_then(|v| v.as_f64()).unwrap_or(0.7),
-                    "qr_size": design.get("qr_size").and_then(|v| v.as_u64()).unwrap_or(200),
+                    "qr_size": design.get("qr_size").and_then(json_u64).unwrap_or(200),
                 });
                 let text_config = json!({
                     "text_x_frac": design.get("text_x_frac").and_then(|v| v.as_f64()).unwrap_or(0.1),
                     "text_y_frac": design.get("text_y_frac").and_then(|v| v.as_f64()).unwrap_or(0.1),
                     "font_family": design.get("font_family").and_then(|v| v.as_str()).unwrap_or("DejaVuSans"),
-                    "font_size": design.get("font_size").and_then(|v| v.as_u64()).unwrap_or(24),
+                    "font_size": design.get("font_size").and_then(json_u64).unwrap_or(24),
                     "font_color": design.get("font_color").and_then(|v| v.as_str()).unwrap_or("#000000"),
                     "bg_color": design.get("bg_color").and_then(|v| v.as_str()).unwrap_or(""),
                     "text_align": design.get("text_align").and_then(|v| v.as_str()).unwrap_or("left"),
@@ -625,7 +633,10 @@ impl Guest for Component {
                     "redeemedAt": c.get("redeemedAt").and_then(|v| v.as_str()).unwrap_or(""),
                     "expiredAt": c.get("expiredAt").and_then(|v| v.as_str()).unwrap_or(""),
                     "templateName": c.get("templateName").and_then(|v| v.as_str()).unwrap_or(""),
-                    "templateAssetId": c.get("templateAssetId").and_then(|v| v.as_str()).unwrap_or(""),
+                    // Custom templates are stored as data: URLs, which would
+                    // blow the host's WASM response limit in list responses.
+                    // Full card data (incl. templateAssetId) comes via get-card.
+                    "templateAssetId": "",
                     "redemptionUrl": redemption_url,
                     "feeMode": c.get("feeMode").and_then(|v| v.as_str()).unwrap_or("default"),
                     "feePercent": c.get("feePercent").and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0),
@@ -681,11 +692,11 @@ impl Guest for Component {
                     "templateAssetId": card.get("templateAssetId").and_then(|v| v.as_str()).unwrap_or(""),
                     "qrXFrac": qr.get("qr_x_frac").and_then(|v| v.as_f64()).unwrap_or(0.1),
                     "qrYFrac": qr.get("qr_y_frac").and_then(|v| v.as_f64()).unwrap_or(0.7),
-                    "qrSize": qr.get("qr_size").and_then(|v| v.as_u64()).unwrap_or(200),
+                    "qrSize": qr.get("qr_size").and_then(json_u64).unwrap_or(200),
                     "textXFrac": txt.get("text_x_frac").and_then(|v| v.as_f64()).unwrap_or(0.1),
                     "textYFrac": txt.get("text_y_frac").and_then(|v| v.as_f64()).unwrap_or(0.1),
                     "fontFamily": txt.get("font_family").and_then(|v| v.as_str()).unwrap_or("DejaVuSans"),
-                    "fontSize": txt.get("font_size").and_then(|v| v.as_u64()).unwrap_or(24),
+                    "fontSize": txt.get("font_size").and_then(json_u64).unwrap_or(24),
                     "fontColor": txt.get("font_color").and_then(|v| v.as_str()).unwrap_or("#000000"),
                     "bgColor": txt.get("bg_color").and_then(|v| v.as_str()).unwrap_or(""),
                     "textAlign": txt.get("text_align").and_then(|v| v.as_str()).unwrap_or("left"),
@@ -756,13 +767,13 @@ impl Guest for Component {
                 let qr_config = json!({
                     "qr_x_frac": design.get("qr_x_frac").and_then(|v| v.as_f64()).unwrap_or(0.1),
                     "qr_y_frac": design.get("qr_y_frac").and_then(|v| v.as_f64()).unwrap_or(0.7),
-                    "qr_size": design.get("qr_size").and_then(|v| v.as_u64()).unwrap_or(200),
+                    "qr_size": design.get("qr_size").and_then(json_u64).unwrap_or(200),
                 });
                 let text_config = json!({
                     "text_x_frac": design.get("text_x_frac").and_then(|v| v.as_f64()).unwrap_or(0.1),
                     "text_y_frac": design.get("text_y_frac").and_then(|v| v.as_f64()).unwrap_or(0.1),
                     "font_family": design.get("font_family").and_then(|v| v.as_str()).unwrap_or("DejaVuSans"),
-                    "font_size": design.get("font_size").and_then(|v| v.as_u64()).unwrap_or(24),
+                    "font_size": design.get("font_size").and_then(json_u64).unwrap_or(24),
                     "font_color": design.get("font_color").and_then(|v| v.as_str()).unwrap_or("#000000"),
                     "bg_color": design.get("bg_color").and_then(|v| v.as_str()).unwrap_or(""),
                     "text_align": design.get("text_align").and_then(|v| v.as_str()).unwrap_or("left"),
